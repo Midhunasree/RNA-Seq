@@ -1,0 +1,452 @@
+---
+title: "Final Project"
+output: pdf_document
+date: "2024-05-28"
+---
+
+```{r}
+# Main idea is to identify how genes respond in two different conditions hypoxia and normxia
+# Working with RNA-Seq data obtained from GEO
+# Step 1: load the library and data set. Our data is in .tsv format
+
+library(readr)
+library(dplyr)
+library(stringr)
+
+raw_counts <- read_tsv("C:/Users/midhu/Downloads/GSE197576_raw_gene_counts_matrix.tsv.gz")
+#checking the dimensions of data.
+dim(raw_counts)
+head(raw_counts)
+#After checking the data we know that the data contains gene names and sample names
+#Now we subset our data to specific samples required
+
+Columns_to_select <- colnames(raw_counts)%>%
+  stringr :: str_detect("sgCTRL|gene")
+
+#Now we subset the data set based on the results above
+counts_sub <- raw_counts[, Columns_to_select]
+head(counts_sub)
+
+#Now we convert the data into a matrix and remove the first column gene names
+raw_counts_mat <- counts_sub[, -1]%>%
+  as.matrix()
+head(raw_counts_mat)
+
+#Adding row names to the data set
+rownames(raw_counts_mat) <- raw_counts$gene
+
+head(raw_counts_mat)
+head(counts_sub)
+
+# Step 2: Calculate the total exon length per gene
+# we need a package from bioconductor to identify the gene length 
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+genes(txdb)
+
+#we just want the exons 
+exons <- exonsBy(txdb, by = "gene")
+
+#calculate the length of exons
+width(exons)
+
+#sum the exons width up per genes 
+head(sum(width(exons)))
+
+#Now let's make a tibble.we use enframe from tibble.The enframe() function is used to convert the result of the previous expression into a tibble with specified column names.
+exon_len <- sum(width(exons))%>%
+  tibble::enframe(name = "ENTREZID", value = "exon_length")
+
+head(exon_len)
+
+#Next, let’s map the ENTREZID to the official gene symbol so we can match the rownames of the RNAseq count matrix. We will need the org.Hs.eg.db Bioconductor package.This package contains info about gene,gene symbols,descriptions
+library(org.Hs.eg.db)
+
+map <- AnnotationDbi::select(org.Hs.eg.db, 
+                            keys = exon_len$ENTREZID, 
+                            columns= "SYMBOL",
+                            keytype = "ENTREZID")
+
+head(map)
+
+#Now, we join the exon_len table 
+map <- left_join(exon_len, map)
+
+#checking the gene symbols present in raw_counts_mat and map
+table(rownames(raw_counts_mat) %in% map$SYMBOL)
+
+#Now we know the number of genes, so now lets see what genes are not in the mapping table we use setdiff to identify the genes present in raw_counts_mat
+
+setdiff(rownames(raw_counts_mat), map$SYMBOL) %>%
+  head(n = 20)
+
+#subsetting the data
+not_in_map <- setdiff(rownames(raw_counts_mat), map$SYMBOL)
+
+raw_counts_mat[not_in_map, ]%>%
+  head(n = 15)
+
+#subset the common genes present in raw_count_mat and map file
+common_genes <- intersect(rownames(raw_counts_mat), map$SYMBOL)
+
+#select only the common genes and re-order them by common_genes
+map <- map %>%
+  dplyr::slice(match(common_genes, SYMBOL))
+
+#we also subset the common genes and re-order them in raw_count_mat
+raw_counts_mat <- raw_counts_mat[common_genes, ]
+head(raw_counts_mat)
+
+#Now the order of gene is same for map and raw_counts_mat
+
+``
+
+
+#Step 3: Normalizing the raw counts to TPM
+```{r}
+#creating a TPM function to normalize the data
+count2tpm <- function(count_matrix, exon_length){
+  reads_per_bp_gene <- count_matrix/ exon_length
+  reads_per_bp_sample <- colSums(reads_per_bp_gene)
+  tpm_matrix <- t(t(reads_per_bp_gene)/reads_per_bp_sample) * 1000000
+  return(tpm_matrix)
+}
+
+#Now lets apply the tpm function to required data
+tpm <- count2tpm(raw_counts_mat, map$exon_length)
+head(tpm)
+
+#Analyzing the gene expression values using t-test
+#First we'll start with WASH7P gene. 
+t.test(tpm["WASH7P", c(1,2)], tpm["WASH7P", c(3,4)])
+#we see there's no significance difference as the p-value is 0.3
+
+#Second gene VEGFA
+t.test(tpm["VEGFA", c(1,2)], tpm["VEGFA", c(3,4)])
+#We see that there's a significant difference between the 2 conditions in VEGFA gene
+
+#Third Gene SLC2A1 
+t.test(tpm["SLC2A1", c(1,2)], tpm["SLC2A1", c(3,4)])
+# The p-value is 0.01354, indicating a significant difference in SLC2A1 expression between the two conditions
+
+#Now We analyze all genes in our data set by creating a custom function 
+mytest <- function(x) t.test(x[c(1,2)], x[c(3,4)], var.equal = TRUE)$p.value
+pvals <- apply(tpm, 1, mytest)%>%
+  na.omit()
+
+head(pvals)
+
+#Analyzing the gene expression data with ggplot
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+#Loading the p-values
+pval_df <- pvals %>%
+  tibble::enframe(name = "gene", value = "pvalue")
+
+head(pval_df)
+
+#Creating a histogram to visualize the distribution of p-values
+ggplot(pval_df, aes(x = pvalue)) +
+  geom_histogram(color = "white") +
+  theme_bw(base_size = 14) +
+  ggtitle("p-value distribution")
+
+#Now, we calculate the average expression levels for both conditions and identifying the up-regulated genes.
+avg_normoxia <- rowMeans(tpm[, c(1, 2)])
+avg_hypoxia <- rowMeans(tpm[,c(3,4)])
+
+#We identify the up regulated genes
+up_genes <- (avg_hypoxia - avg_normoxia) > 0 
+up_gene_names <- rownames(tpm)[up_genes]
+head(up_gene_names)
+
+#we identified the genes that are upregulated, now we select the differentially expressed genes
+differential_genes <- pvals[pvals < 0.01 & !is.na(pvals)] %>%
+  names()
+differential_up_genes <- intersect(differential_genes, up_gene_names)
+
+#checking the count
+length(differential_up_genes)
+
+#We prepare our data for creating a boxplot to visualize gene expression changes between the two conditions. 
+#Converting gene expression data to long format
+tpm[differential_genes, ] %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "gene") %>%
+  tidyr::pivot_longer(-1, names_to = "sample", values_to = "tpm")
+
+#We add one more column to denote the condition 
+tpm_df<- tpm[differential_genes, ] %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var="gene") %>%
+  tidyr::pivot_longer(-1, names_to = "sample", values_to = "tpm") %>%
+  tidyr::separate(sample, into = c("sample", "condition"), sep = "_sgCTRL_")
+
+head(tpm_df)
+
+#creating a boxplot
+ggplot(tpm_df, aes(x = condition, y = log2(tpm + 1))) +
+  geom_boxplot() +
+  theme_bw(base_size = 14)
+
+#Visualizing raw expression values to identify outliers. we select specific genes to check this 
+ggplot(tpm_df %>%
+         filter(gene %in% c("VEGFA", "SLC2A1")), 
+       aes(x = condition, y = log2(tpm + 1))) +
+  geom_point() +
+  geom_boxplot() +
+  facet_wrap(~ gene) +
+  theme_bw(base_size = 14)
+
+## FDR 
+#order the pvals computed above and plot it.
+alpha <- 0.05
+
+#m is the number of 17744 comparisons 
+m <- length(pvals)
+
+# let's arrange the p-value from small to big and get only the first 5000  
+top_5000_pvalue <- pval_df %>%
+  dplyr::arrange(pvalue) %>%
+  mutate(rank = row_number()) %>%
+  dplyr::slice(1:5000)
+
+head(top_5000_pvalue)
+
+```
+
+## Analyzing gene expression data with DESeq2
+```{r}
+#Loading required libraries
+library(DESeq2)
+coldata <- data.frame(condition = c("normoxia", "normoxia", "hypoxia", "hypoxia"))
+rownames(coldata) <- colnames(raw_counts_mat)
+
+coldata
+
+#creating a DESeqData set object 
+dds <- DESeqDataSetFromMatrix(countData = raw_counts_mat,
+                              colData = coldata,
+                              design = ~ condition)
+
+#Performing differential gene expression analysis
+dds <- DESeq(dds)
+
+#we extract results from the DESeq2 analysis, specifying the contrast between two conditions
+res <- results(dds, contrast = c("condition", "hypoxia", "normoxia"))%>%
+  na.omit()
+
+#Generating a volcano plot using ggplot
+ggplot(data = as.data.frame(res))+
+  geom_point(aes(x = log2FoldChange, y = -log10(pvalue)))+
+  ggtitle("Volcano plot")
+#Explanation: In this plot,we can see that each point represents a gene. The x-axis shows how much a gene's expression changes (log2 fold change), while the y-axis indicates the significance of the change (-log10 p-value). Genes with a significant change will be far to the left or right on the plot, and those with very low p-values will be at the top.
+
+#Examining the top differentially expressed genes based on padj and log2FoldChange
+top_differentially_expressed_genes <- res %>%
+  as.data.frame() %>%
+  arrange(padj, desc(log2FoldChange)) %>%
+  head(n = 30)
+
+#We are trying to label the genes in Volcano plot here
+genes_to_label <- res %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "gene") %>%
+  filter(!stringr::str_detect(gene, "LOC"),
+         abs(log2FoldChange) >= 2.5,
+         padj <= 0.001)
+
+#Loading library required for labeling
+library(ggrepel)
+
+#Generating volcano plot with labels using ggrepel
+ggplot(data = as.data.frame(res), aes(x = log2FoldChange, y = -log10(pvalue))) +
+  geom_point() +
+  ggrepel::geom_label_repel(data = genes_to_label, aes(label = gene)) +
+  theme_bw(base_size = 14)
+
+#To further enhance the plot, we can color the points based on significance
+res2 <- res %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "gene") %>%
+  mutate(sig = case_when(
+    !stringr::str_detect(gene, "LOC") &
+      abs(log2FoldChange) >= 2.5 &
+      padj <= 0.001 ~ "sig",
+    TRUE ~ "not sig"
+  ))
+
+#Now we update the volcano plot with signficant and not significant genes
+ggplot(res2, aes(x = log2FoldChange, y = -log10(pvalue))) +
+  geom_point(aes(color = sig)) +
+  ggrepel::geom_label_repel(data = genes_to_label, aes(label = gene))+
+  theme_bw(base_size = 14)
+
+```
+
+# PCA Analysis
+```{r}
+#Performing variance stabilizing transformation on the data
+vsd <- vst(dds, blind = FALSE)
+
+#Plot PCA using vst data
+plotPCA(vsd, intgroup=c("condition"))
+
+#Filtering significant genes based on adjusted p-value and log2 fold change for plotting heatmap
+library(ComplexHeatmap)
+significant_genes <- res %>%
+  as.data.frame()%>%
+  filter(padj <= 0.01, abs(log2FoldChange)>= 2)%>%
+  rownames()
+
+#To ensure the heatmap is informative, we scale the data using the scale function. It sets mean to 0 and std dev to 1
+normalized_counts <- assay(vsd) %>% as.matrix()
+significant_mat <- normalized_counts[significant_genes, ]
+
+#Generating heatmap with scaled data
+Heatmap(
+  t(scale(t(significant_mat))),
+  show_row_names = FALSE,
+  name = "scaled\nexpression"
+)
+
+#creating a data frame for adding annotations to heatmap. This helps us understand the heatmap a little better
+coldata <- data.frame(
+  condition = c("hypoxia", "hypoxia", "normoxia", "normoxia")
+  )
+
+#Creating a HeatmapAnnotation object for the column annotations
+col_anno <- HeatmapAnnotation(
+  df = coldata,
+  col = list(condition = c("hypoxia" = "green", "normoxia" = "blue"))
+)
+
+#Generating heatmap with column annotations
+Heatmap(
+  t(scale(t(significant_mat))),
+  top_annotation = col_anno,
+  show_row_names = FALSE,
+  name = "scaled normalized\nexpression"
+)
+
+```
+
+
+```{r}
+## Pathway Analysis
+library(clusterProfiler)
+
+#Converting gene ID to EntrezId
+significant_genes_map<- clusterProfiler::bitr(geneID = significant_genes,
+                      fromType="SYMBOL", toType="ENTREZID",
+                      OrgDb="org.Hs.eg.db")
+
+head(significant_genes_map)
+
+# we also require backrground genes.Background genes are genes that are detected in the RNAseq experiment. we are also filtering out the genes that has zero expression in all conditions i.e those are not detected in the RNA-sequencing
+
+
+background_genes <- res %>% 
+  as.data.frame() %>% 
+  filter(baseMean != 0) %>%
+  tibble::rownames_to_column(var = "gene") %>%
+  pull(gene)
+
+head(background_genes)
+#As we are gonna use this results often saved it to a dataframe for easy accesbility.
+ res_df <- res %>% 
+  as.data.frame() %>% 
+  filter(baseMean != 0) %>%
+  tibble::rownames_to_column(var = "gene")
+
+#Now, we also the map the gene symbols and their corresponding Entrez IDs for the background genes. 
+background_genes_map <- clusterProfiler::bitr(geneID = background_genes,
+                                               fromType = "SYMBOL",
+                                               toType = "ENTREZID",
+                                               OrgDb = "org.Hs.eg.db")
+ 
+#Now, we perform gene enrich analysis using enrichGO
+
+ego <- enrichGO(
+  gene = significant_genes_map$ENTREZID,
+  universe = background_genes_map$ENTREZID,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  pvalueCutoff = 0.01,
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE,
+)
+head(ego)
+#Now let's do a barplot for visualization
+barplot(ego, showCategory=20) 
+dotplot(ego)
+
+## Gene Enrichment Analysis. MSigDBis a widely used resource for gene set enrichment analysis.
+library(msigdbr)
+#We retrieve Hallmark gene sets for Homo sapiens
+m_df <- msigdbr(species = "Homo sapiens")
+
+#selecting the gene set name and ENTREZ ID
+m_t2g <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, entrez_gene)
+
+head(m_t2g)
+
+#Now, we'll use siginifcant gene set and Hallmart gene set to perform gene enrichment analysis
+em <- enricher(significant_genes_map$ENTREZID, TERM2GENE = m_t2g, universe = background_genes_map$ENTREZID)
+
+head(em)
+
+dotplot(em)
+
+#From the graph we can say that "HALLMARK HYPOXIA" is the pathway most strongly associated with the genes and that is why we are studying it.
+
+
+## Gene set enrichment analysis: Gene Set Enrichment Analysis (GSEA) is an alternative approach that considers the entire list of genes ranked by their association with a phenotype or condition. 
+res_df <- res_df %>% 
+  mutate(signed_rank_stats = sign(log2FoldChange) * -log10(pvalue)) %>%
+  left_join(background_genes_map, by = c("gene" = "SYMBOL")) %>%
+  arrange(desc(signed_rank_stats))
+
+#As the infinite values are present in the data we replace the infinite values with large numbers
+
+res_df <- res_df %>%
+  mutate(negative_log10pvalue = -log10(pvalue)) %>%
+  mutate(negative_log10pvalue = ifelse(is.infinite(negative_log10pvalue), 1000, negative_log10pvalue)) %>%
+  mutate(signed_rank_stats = sign(log2FoldChange) * negative_log10pvalue)
+
+#Now, we perform gsea using pre-ranked gene list and a reference gene set(m_t2g)
+gene_list <- res_df$signed_rank_stats
+names(gene_list) <- res_df$ENTREZID
+
+em2 <- GSEA(gene_list, TERM2GENE = m_t2g)
+
+head(em2)
+
+#ES measures the degree ton whcich the gene set is overrepresented. We can see for hypoxia condition they are positively upregulated 
+
+#viewing results 
+em2@result
+
+#visualizing the results using gseaplot function
+
+p1<- gseaplot(em2, geneSetID = "HALLMARK_G2M_CHECKPOINT", 
+              by = "runningScore", title = "HALLMARK_G2M_CHECKPOINT")
+p2 <- gseaplot(em2,geneSetID = "HALLMARK_HYPOXIA",
+               by = "runningScore", title = "HALLMARKHYPOXIA")
+
+#Comparing the visulaization side by side
+p1/p2
+
+
+#From the graph we can see that hypoxia gene sets are at the front of the ranked list which means hypoxia pathway is upregulated and the G2M gene sets are at the end of the ranked list which means it is downregulated
+
+```
+
+

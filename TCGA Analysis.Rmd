@@ -1,0 +1,149 @@
+---
+title: "TCGA Analysis"
+output: pdf_document
+date: "2024-06-01"
+---
+# The manin objective of this is to download the raw RNA-Seq counts for 33 cancer types and  convert them into TPM and plot them(barplot and heatmap).  we use data from TCGA for our analysis. There are many packages to access TCGA data we use recount3 package
+
+```{r}
+#Loading required libraries
+library(recount3)
+library(purrr)
+library(dplyr)
+library(ggplot2)
+
+# Get information about all available TCGA projects 
+human_projects <- available_projects()
+
+#we see the data is from many different resources so we filter projects that are from TCGA data sources
+
+tcga_info <- human_projects%>%
+  filter(file_source == "tcga" & project_type == "data_sources")
+
+#Checking the tcga_info dataset
+head(tcga_info)
+
+#Convert each row of the tcga_info data frame into a separate list element.This is useful for independently processing or accessing each project's information
+proj_info <- map(seq(nrow(tcga_info)), ~tcga_info[.x, ])
+
+# Now we create a data structure called RangedsummarizedExperiment. Which will allow us to work with genomic data 
+rse_tcga <- map(proj_info, ~create_rse(.x))
+
+head(rse_tcga)
+
+#Extracting a small 5x5 subset of the raw count data from the first RangedSummarizedExperiment object
+
+raw_count <- rse_tcga[[1]]@assays@data$raw_counts[1:5, 1:5]
+
+#Now we access gene information
+gene_info <- rse_tcga[[1]]@rowRanges
+
+#Now we access metadata which gives details about each sample, such as unique identifiers, external IDs. 
+metadata_info <- rse_tcga[[1]]@colData@listData %>% as.data.frame() %>% "[" (1:5, 1:5)
+
+#we speicfy some genes which we know are related to cancer as genes of interest
+genes_of_interest<- c("MSLN", "EGFR", "ERBB2", "CEACAM5", "NECTIN4", "EPCAM", 
+                      "MUC16", "MUC1", "CD276", "FOLH1", "DLL3", "VTCN1", 
+                      "PROM1", "PVR", "CLDN6", "MET", "FOLR1", "TNFRSF10B", 
+                      "TACSTD2", "CD24")
+
+
+#Converting raw counts into TPM for normalizing the data and making it comparable across different genes 
+count2tpm <- function(rse) {
+    count_matrix <- rse@assays@data$raw_counts
+    gene_length <- rse@rowRanges$bp_length
+    reads_per_rpk <- count_matrix / gene_length
+    per_mil_scale <- colSums(reads_per_rpk) / 1e6
+    tpm_matrix <- t(t(reads_per_rpk) / per_mil_scale)
+    
+    gene_ind <- rse@rowRanges$gene_name %in% genes_of_interest
+    tpm_submatrix <- tpm_matrix[gene_ind,]
+    rownames(tpm_submatrix) <- rse@rowRanges[gene_ind, ]$gene_name
+    
+    return(tpm_submatrix)
+}
+
+#Applying the count2tpm function to each RangedSummarizedExperiment object in the rse_tcga list
+tpm_data <- map(rse_tcga, count2tpm)
+
+# Combine the TPM data matrices into one matrix by binding them column-wise
+tpm_data2 <- do.call(cbind, tpm_data)
+
+#we need to combine the metadata associated with each TCGA project into a single metadata table
+
+metadata <- map(rse_tcga, ~.x@colData@listData %>% as.data.frame())
+    
+# Combine the individual metadata data frames into one single data frame 
+metadata2 <- do.call(rbind, metadata)
+
+#
+dim(tpm_data2)
+dim(metadata2)
+
+#As there are too many columns in metadata and we dont need everything, so we just take three columns from it which are imp 
+table(metadata2$tcga.cgc_sample_sample_type)
+metadata2 <- metadata2 %>%
+  dplyr::select(tcga.tcga_barcode, tcga.cgc_sample_sample_type, study) %>%
+  mutate(sample_type = case_when(
+    tcga.cgc_sample_sample_type == "Additional - New Primary" ~ "cancer",
+    tcga.cgc_sample_sample_type == "Additional Metastatic" ~ "metastatic",
+    tcga.cgc_sample_sample_type == "Metastatic" ~ "metastatic",
+    tcga.cgc_sample_sample_type == "Primary Blood Derived Cancer - Peripheral Blood " ~ "cancer",
+    tcga.cgc_sample_sample_type == "Primary Tumor" ~ "cancer",
+    tcga.cgc_sample_sample_type == "Recurrent Tumor" ~ "cancer",
+    tcga.cgc_sample_sample_type == "Solid Tissue Normal" ~ "normal"
+  ))
+
+#Now we combine the metadata and count matrix into a single dataframe
+final_df <- cbind(t(tpm_data2), metadata2)
+head(final_df)
+#As we have everything in one data frame now we can make a heatmap
+library(ComplexHeatmap)
+
+#we only take sample_type and study, we generate a  heatmap based on median
+tcga_df <- final_df %>%
+  filter(sample_type == "cancer")%>%
+  group_by(sample_type, study) %>%
+  summarise(across(1:20, ~log2(.x+1)))%>%
+  summarise(across(1:20, median))%>%
+  arrange(study)%>%
+  filter(!is.na(sample_type))
+head(tcga_df)
+
+
+#we convert it to a matrix
+tcga_mat <- tcga_df[,-c(1,2)]%>%as.matrix()
+rownames(tcga_mat) <- tcga_df%>%pull(study)
+
+#Defining a cell function for grid lines
+
+cell_fun = function(j, i, x, y, w, h, fill) {
+  grid.rect(x = x, y = y, width = w, height = h, gp = gpar(col = "black", fill = NA))
+}
+
+#plotting the heatmap
+Heatmap(tcga_mat, cluster_columns = TRUE, cell_fun = cell_fun, name = "log2TPM")
+
+## Sanity Check
+
+#we will conduct a sanity check of the gene expression heatmap to see if the results make biological sense. we choose two genes MSLN and FOLH1 here.
+
+sanity_check_genes <- c("MSLN", "FOLH1")
+
+# Extract the rows (genes) corresponding to sanity check genes
+sanity_check_data <- tcga_mat[rownames(tcga_mat) %in% sanity_check_genes, ]
+
+# Print the results
+print(sanity_check_data)
+
+## Scaling the data
+
+#To visualize gene expression in a more comparative manner, we can scale the expression values for each gene across the cancer types
+
+scaled_tcga_mat <- scale(tcga_mat)
+
+# Creating a scaled heatmap
+Heatmap(scaled_tcga_mat, cluster_columns = TRUE, cell_fun = cell_fun, name = "scaled\nlog2TPM")
+
+
+```
