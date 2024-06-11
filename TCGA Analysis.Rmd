@@ -1,7 +1,7 @@
 ---
 title: "TCGA Analysis"
 output: pdf_document
-date: "2024-06-01"
+date: "2024-03-25"
 ---
 # The manin objective of this is to download the raw RNA-Seq counts for 33 cancer types and  convert them into TPM and plot them(barplot and heatmap).  we use data from TCGA for our analysis. There are many packages to access TCGA data we use recount3 package
 

@@ -1,7 +1,7 @@
 ---
 title: "Final Project"
 output: pdf_document
-date: "2024-05-28"
+date: "2024-03-28"
 ---
 
 ```{r}
@@ -18,8 +18,8 @@ raw_counts <- read_tsv("C:/Users/midhu/Downloads/GSE197576_raw_gene_counts_matri
 dim(raw_counts)
 head(raw_counts)
 #After checking the data we know that the data contains gene names and sample names
-#Now we subset our data to specific samples required
 
+#Now we subset our data to specific samples required
 Columns_to_select <- colnames(raw_counts)%>%
   stringr :: str_detect("sgCTRL|gene")
 
@@ -34,11 +34,13 @@ head(raw_counts_mat)
 
 #Adding row names to the data set
 rownames(raw_counts_mat) <- raw_counts$gene
-
 head(raw_counts_mat)
 head(counts_sub)
 
-# Step 2: Calculate the total exon length per gene
+```
+
+### Calculate the total exon length per gene
+```{r}
 # we need a package from bioconductor to identify the gene length 
 library(TxDb.Hsapiens.UCSC.hg19.knownGene)
 
@@ -100,11 +102,10 @@ raw_counts_mat <- raw_counts_mat[common_genes, ]
 head(raw_counts_mat)
 
 #Now the order of gene is same for map and raw_counts_mat
+```
 
-``
 
-
-#Step 3: Normalizing the raw counts to TPM
+#### Normalizing the raw counts to TPM
 ```{r}
 #creating a TPM function to normalize the data
 count2tpm <- function(count_matrix, exon_length){
@@ -219,7 +220,7 @@ head(top_5000_pvalue)
 
 ```
 
-## Analyzing gene expression data with DESeq2
+#### Analyzing gene expression data with DESeq2
 ```{r}
 #Loading required libraries
 library(DESeq2)
@@ -288,7 +289,7 @@ ggplot(res2, aes(x = log2FoldChange, y = -log10(pvalue))) +
 
 ```
 
-# PCA Analysis
+#### PCA Analysis
 ```{r}
 #Performing variance stabilizing transformation on the data
 vsd <- vst(dds, blind = FALSE)
@@ -335,11 +336,9 @@ Heatmap(
 
 ```
 
-
+#### Pathway Analysis
 ```{r}
-## Pathway Analysis
 library(clusterProfiler)
-
 #Converting gene ID to EntrezId
 significant_genes_map<- clusterProfiler::bitr(geneID = significant_genes,
                       fromType="SYMBOL", toType="ENTREZID",
@@ -347,9 +346,7 @@ significant_genes_map<- clusterProfiler::bitr(geneID = significant_genes,
 
 head(significant_genes_map)
 
-# we also require backrground genes.Background genes are genes that are detected in the RNAseq experiment. we are also filtering out the genes that has zero expression in all conditions i.e those are not detected in the RNA-sequencing
-
-
+# we also require background genes.Background genes are genes that are detected in the RNAseq experiment. we are also filtering out the genes that has zero expression in all conditions i.e those are not detected in the RNA-sequencing
 background_genes <- res %>% 
   as.data.frame() %>% 
   filter(baseMean != 0) %>%
@@ -370,7 +367,6 @@ background_genes_map <- clusterProfiler::bitr(geneID = background_genes,
                                                OrgDb = "org.Hs.eg.db")
  
 #Now, we perform gene enrich analysis using enrichGO
-
 ego <- enrichGO(
   gene = significant_genes_map$ENTREZID,
   universe = background_genes_map$ENTREZID,
@@ -387,8 +383,10 @@ head(ego)
 barplot(ego, showCategory=20) 
 dotplot(ego)
 
-## Gene Enrichment Analysis. MSigDBis a widely used resource for gene set enrichment analysis.
+### Gene Enrichment Analysis. 
+#MSigDBis a widely used resource for gene set enrichment analysis.
 library(msigdbr)
+
 #We retrieve Hallmark gene sets for Homo sapiens
 m_df <- msigdbr(species = "Homo sapiens")
 
@@ -398,24 +396,22 @@ m_t2g <- msigdbr(species = "Homo sapiens", category = "H") %>%
 
 head(m_t2g)
 
-#Now, we'll use siginifcant gene set and Hallmart gene set to perform gene enrichment analysis
+#Now, we'll use significant gene set and Hallmark gene set to perform gene enrichment analysis
 em <- enricher(significant_genes_map$ENTREZID, TERM2GENE = m_t2g, universe = background_genes_map$ENTREZID)
 
 head(em)
-
 dotplot(em)
 
 #From the graph we can say that "HALLMARK HYPOXIA" is the pathway most strongly associated with the genes and that is why we are studying it.
 
 
-## Gene set enrichment analysis: Gene Set Enrichment Analysis (GSEA) is an alternative approach that considers the entire list of genes ranked by their association with a phenotype or condition. 
+#### Gene set enrichment analysis: Gene Set Enrichment Analysis (GSEA) is an alternative approach that considers the entire list of genes ranked by their association with a phenotype or condition. 
 res_df <- res_df %>% 
   mutate(signed_rank_stats = sign(log2FoldChange) * -log10(pvalue)) %>%
   left_join(background_genes_map, by = c("gene" = "SYMBOL")) %>%
   arrange(desc(signed_rank_stats))
 
 #As the infinite values are present in the data we replace the infinite values with large numbers
-
 res_df <- res_df %>%
   mutate(negative_log10pvalue = -log10(pvalue)) %>%
   mutate(negative_log10pvalue = ifelse(is.infinite(negative_log10pvalue), 1000, negative_log10pvalue)) %>%
@@ -429,24 +425,19 @@ em2 <- GSEA(gene_list, TERM2GENE = m_t2g)
 
 head(em2)
 
-#ES measures the degree ton whcich the gene set is overrepresented. We can see for hypoxia condition they are positively upregulated 
+#ES measures the degree ton which the gene set is overrepresented. We can see for hypoxia condition they are positively upregulated 
 
 #viewing results 
 em2@result
 
 #visualizing the results using gseaplot function
-
 p1<- gseaplot(em2, geneSetID = "HALLMARK_G2M_CHECKPOINT", 
               by = "runningScore", title = "HALLMARK_G2M_CHECKPOINT")
 p2 <- gseaplot(em2,geneSetID = "HALLMARK_HYPOXIA",
                by = "runningScore", title = "HALLMARKHYPOXIA")
 
-#Comparing the visulaization side by side
+#Comparing the visualization side by side
 p1/p2
 
-
-#From the graph we can see that hypoxia gene sets are at the front of the ranked list which means hypoxia pathway is upregulated and the G2M gene sets are at the end of the ranked list which means it is downregulated
-
 ```
-
-
+# From the graph we can see that hypoxia gene sets are at the front of the ranked list which means hypoxia pathway is upregulated and the G2M gene sets are at the end of the ranked list which means it is downregulated

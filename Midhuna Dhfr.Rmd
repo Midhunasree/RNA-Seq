@@ -1,0 +1,110 @@
+---
+title: "Dhfr Data Understanding"
+author: "Midhuna"
+date: "2023-10-25"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+```{r}
+#Data Understanding of a drug discovery dataset we can know if a compound is good drug or a bad drug
+
+#Loading libraries
+library(datasets)
+library(tidyverse)
+library(caret)
+library(skimr)
+library(dplyr)
+library(ggplot2)
+
+#Loading the dataset
+data("dhfr")
+
+#checking summary of entire dataset
+summary(dhfr)
+
+#checking if the dataset has any missing values
+sum(is.na(dhfr))
+
+#Checking summary statistics in more detail
+head(skim(dhfr))
+
+#Grouping the data based on Y
+dhfr%>%
+  group_by(Y)%>%
+  skim()
+
+#visualizing dataset to check if there is some relation between variables
+plot(dhfr$moe2D_zagreb, dhfr$moe2D_bpol)
+
+#Feature plot for first four variables
+featurePlot(x = dhfr[,2:5],
+            y = dhfr$Y,
+            plot = "box",
+            strip=strip.custom(par.strip.text=list(cex=.7)),
+            scales = list(x = list(relation = "free"),
+                          y = list(relation = "free")))
+
+
+```
+
+
+
+```{r}
+#setting set seed number
+set.seed(100)
+
+#Data split we create training model and testing model. training set represents 80% of training dataset whereas testing model represents 20 % of the data. So, we are gonna use 80% to build a training model and apply this to predict class label of testing dataset. we take 0.8 as it's 80% of training
+Training_index <- createDataPartition(dhfr$Y, p= 0.8,list = FALSE)
+TrainingSet <- dhfr[Training_index, ]
+TestingSet <- dhfr[-Training_index, ]
+ 
+
+#SVM MOdel using polynomial kernel
+Model <- train(Y ~ ., data = TrainingSet,
+               method = "svmPoly",
+               na.action = na.omit,
+               preProcess = c("scale","center"),
+               trControl = trainControl(method="none"),
+               tuneGrid = data.frame(degree=1,scale=1,C=1)
+                                       
+               )
+
+#we create a cross-validation model by k= 10, for each iteration we use 9 fold iteration to create a training model and leave 1 fold out and apply the prediction model to predict the left out group and repeat this for 10 times and average over the performance so it will be cross validation
+MOdel.cv <- train(Y ~ ., data = TrainingSet,
+               method = "svmPoly",
+               na.action = na.omit,
+               preProcess = c("scale","center"),
+               trControl = trainControl(method="CV", number=10),
+               tuneGrid = data.frame(degree=1,scale=1,C=1)
+                                       
+               )
+
+
+
+#Applying model for prediction
+
+#testing model has 30 flowers. training model has 120 flowers(obs)
+Model.training <- predict(Model, TrainingSet)# perfomed against our training set (120 flowers to create a prediction model we use that to predict 120 flowers)
+Model.testing <- predict(Model, TestingSet) #create a prediction model of 120 flowers and apply it on 30 flowers of testing data
+
+MOdel.v <- predict(MOdel.cv, TrainingSet)
+
+
+#Looking at prediction performance
+Model.training.confusion <- confusionMatrix(Model.training, TrainingSet$Y)
+Model.testing.confusion <- confusionMatrix(Model.testing, TestingSet$Y)
+Model.v.confusion <- confusionMatrix(MOdel.v, TrainingSet$Y)
+
+
+# Feature Importance
+importance <- varImp(Model)#we can know for each flower class which variable is playing an important role for prediction
+plot(importance, top = 25)
+plot(importance, col = "red")
+
+```
+#moe2D_PEOE has contribution towards the prediction model
+
