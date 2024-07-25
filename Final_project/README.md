@@ -1,6 +1,6 @@
 # RNA-Seq Analysis of Hypoxia vs Normoxia Conditions
 ## Introduction
-This repository contains R scripts for analyzing RNA-Seq data to identify gene expression changes under hypoxia and normoxia conditions in the SW480 cell line. This analysis includes data normalization, differential expression analysis, visualization, and pathway analysis.
+This project contains R scripts for analyzing RNA-Seq data to identify gene expression changes under hypoxia and normoxia conditions in the SW480 cell line. This analysis includes data normalization, differential expression analysis, visualization, and pathway analysis.
 ## Data
 The RNA-Seq data is in the .tsv format and was obtained from the GEO database. For this analysis, we used the dataset GSE197576.
 
